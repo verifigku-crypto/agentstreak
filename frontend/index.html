@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentStreak — Daily check-in for Agent ID holders</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 0 16px 48px; max-width: 760px; margin-left: auto; margin-right: auto; line-height: 1.55; }
+  header { padding: 28px 0 8px; }
+  h1 { margin: 0 0 4px; font-size: 2rem; }
+  .sub { color: #666; margin: 0 0 16px; }
+  .card { border: 1px solid #ccc; border-radius: 12px; padding: 16px; margin: 14px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { border: 1px solid #ccc; border-radius: 10px; padding: 12px; }
+  .stat .label { font-size: 0.85rem; color: #666; }
+  .stat .value { font-size: 1.5rem; font-weight: 700; }
+  button { font-size: 1rem; padding: 10px 18px; border-radius: 8px; border: 1px solid #888; background: #111; color: #fff; cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.secondary { background: transparent; color: inherit; }
+  .ok { color: #0a7d2c; font-weight: 700; }
+  .bad { color: #b3261e; font-weight: 700; }
+  .muted { color: #666; font-size: 0.9rem; }
+  #status { min-height: 1.4em; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #ddd; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code { overflow-wrap: anywhere; }
+  footer { margin-top: 28px; font-size: 0.9rem; color: #666; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AgentStreak</h1>
+  <p class="sub">A daily check-in streak for Agent ID holders. One check-in per UTC day — miss a day and the streak restarts at 1.</p>
+</header>
+
+<section class="card">
+  <h2 style="margin-top:0">How Agent ID is used</h2>
+  <p>AgentStreak only works if your wallet holds an <strong>Agent ID</strong> — an on-chain name issued to an Agentic Wallet. Every check-in calls <code>balanceOf</code> on the Agent ID contract; if your balance is zero the transaction is rejected on-chain. Your Agent ID is never stored, copied, or sent anywhere by this page — the check happens entirely inside the smart contract. No login, no QR code, no session, no seed phrase, no private key is ever asked for or collected.</p>
+  <p class="muted">AgentStreak is a free daily check-in experiment. It promises no rewards, tokens, points value, or returns of any kind.</p>
+</section>
+
+<section class="card">
+  <button id="connectBtn">Connect wallet</button>
+  <button id="switchBtn" class="secondary" style="display:none">Switch to chain 56</button>
+  <p id="status" class="muted">Not connected. Connect a wallet on chain 56 to see your streak.</p>
+  <p class="muted" id="accountLine"></p>
+</section>
+
+<section class="card">
+  <div class="grid">
+    <div class="stat"><div class="label">Agent ID</div><div class="value" id="agentIdStat">—</div></div>
+    <div class="stat"><div class="label">Your streak</div><div class="value" id="streakStat">—</div></div>
+    <div class="stat"><div class="label">Last check-in (UTC)</div><div class="value" id="lastStat" style="font-size:1.1rem">—</div></div>
+    <div class="stat"><div class="label">Your total check-ins</div><div class="value" id="mineStat">—</div></div>
+    <div class="stat"><div class="label">Global total check-ins</div><div class="value" id="globalStat">—</div></div>
+  </div>
+  <p style="margin-top:16px">
+    <button id="checkInBtn" disabled>Check in today</button>
+  </p>
+  <p id="checkInMsg" class="muted"></p>
+</section>
+
+<section class="card">
+  <h2 style="margin-top:0">Leaderboard — best streaks</h2>
+  <p class="muted">Best streak ever recorded per wallet (from on-chain CheckIn events).</p>
+  <div id="board">Loading…</div>
+</section>
+
+<footer>
+  <p>Contract: <code id="contractAddr">not deployed yet</code></p>
+  <p>Agent ID contract: <code>0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F</code></p>
+  <p>AgentStreak has no owner, no admin, no fees and no upgrade mechanism. Check-ins cost only network gas, paid by you when you confirm the transaction in your own wallet.</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<script>
+// ---- Configuration: set these after deployment -----------------------------
+const CONTRACT_ADDRESS = "0x65A18c130E77d8Ee67f03Ab31979DFF01ED40e44"; // AgentStreak, deployed 18 Nov 2026 (tx 0xaf87f8d5b0c8b4644d04817a5f4f89c2249b39e8f3a64f36fa33ef49b51ce1c6)
+const DEPLOY_BLOCK = 134342178; // block number of the deployment transaction
+// ----------------------------------------------------------------------------
+const AGENT_ID_ADDRESS = "0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F";
+const RPC_URL = "https://bsc-dataseed.binance.org/";
+const CHAIN_ID = 56;
+
+const AGENT_STREAK_ABI = [{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"user","type":"address"},{"indexed":false,"internalType":"uint256","name":"streak","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"day","type":"uint256"}],"name":"CheckIn","type":"event"},{"inputs":[],"name":"AGENT_ID","outputs":[{"internalType":"contract IERC721","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"checkIn","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"user","type":"address"}],"name":"getLastCheckInDay","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"user","type":"address"}],"name":"getStreak","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"user","type":"address"}],"name":"getTotalCheckIns","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"lastCheckInDay","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"streak","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"totalCheckIns","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"userCheckIns","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}];
+const AGENT_ID_ABI = ["function balanceOf(address owner) view returns (uint256)"];
+
+const $ = (id) => document.getElementById(id);
+const isDeployed = CONTRACT_ADDRESS !== "0x0000000000000000000000000000000000000000";
+if (isDeployed) $("contractAddr").textContent = CONTRACT_ADDRESS;
+
+const readProvider = new ethers.JsonRpcProvider(RPC_URL);
+let walletProvider = null;
+let signer = null;
+let account = null;
+
+function shortAddr(a) { return a ? a.slice(0, 6) + "…" + a.slice(-4) : "—"; }
+function dayToDate(day) {
+  if (!day || day === 0n) return "never";
+  return new Date(Number(day) * 86400 * 1000).toISOString().slice(0, 10);
+}
+
+async function refreshGlobal() {
+  if (!isDeployed) { $("globalStat").textContent = "—"; return; }
+  try {
+    const c = new ethers.Contract(CONTRACT_ADDRESS, AGENT_STREAK_ABI, readProvider);
+    $("globalStat").textContent = (await c.totalCheckIns()).toString();
+  } catch (e) { $("globalStat").textContent = "error"; }
+}
+
+async function refreshUser() {
+  if (!account) return;
+  try {
+    const agentId = new ethers.Contract(AGENT_ID_ADDRESS, AGENT_ID_ABI, readProvider);
+    const bal = await agentId.balanceOf(account);
+    const hasId = bal > 0n;
+    $("agentIdStat").innerHTML = hasId ? '<span class="ok">Yes (' + bal.toString() + ')</span>' : '<span class="bad">No</span>';
+    if (!isDeployed) {
+      $("streakStat").textContent = "—";
+      $("lastStat").textContent = "—";
+      $("mineStat").textContent = "—";
+      $("checkInBtn").disabled = true;
+      $("checkInMsg").textContent = "Contract not deployed yet — check-in is unavailable.";
+      return;
+    }
+    const c = new ethers.Contract(CONTRACT_ADDRESS, AGENT_STREAK_ABI, readProvider);
+    const [streak, lastDay, mine] = await Promise.all([
+      c.getStreak(account), c.getLastCheckInDay(account), c.getTotalCheckIns(account),
+    ]);
+    $("streakStat").textContent = streak.toString();
+    $("lastStat").textContent = dayToDate(lastDay);
+    $("mineStat").textContent = mine.toString();
+    const today = Math.floor(Date.now() / 1000 / 86400);
+    if (!hasId) {
+      $("checkInBtn").disabled = true;
+      $("checkInMsg").textContent = "You need an Agent ID to check in.";
+    } else if (lastDay === BigInt(today)) {
+      $("checkInBtn").disabled = true;
+      $("checkInMsg").textContent = "Already checked in today. Come back tomorrow (UTC).";
+    } else {
+      $("checkInBtn").disabled = false;
+      $("checkInMsg").textContent = "";
+    }
+  } catch (e) {
+    $("status").textContent = "Failed to read on-chain data: " + (e.shortMessage || e.message);
+  }
+}
+
+async function loadLeaderboard() {
+  const board = $("board");
+  if (!isDeployed) { board.innerHTML = '<p class="muted">Leaderboard will appear after the contract is deployed.</p>'; return; }
+  try {
+    const iface = new ethers.Interface(AGENT_STREAK_ABI);
+    const topic = iface.getEvent("CheckIn").topicHash;
+    const latest = await readProvider.getBlockNumber();
+    const CHUNK = 5000;
+    const best = new Map(); // address -> best streak
+    for (let from = DEPLOY_BLOCK; from <= latest; from += CHUNK) {
+      const to = Math.min(from + CHUNK - 1, latest);
+      const logs = await readProvider.getLogs({ address: CONTRACT_ADDRESS, topics: [topic], fromBlock: from, toBlock: to });
+      for (const log of logs) {
+        const parsed = iface.parseLog(log);
+        const user = parsed.args.user;
+        const s = parsed.args.streak;
+        if (!best.has(user) || s > best.get(user)) best.set(user, s);
+      }
+    }
+    const rows = [...best.entries()].sort((a, b) => Number(b[1] - a[1])).slice(0, 10);
+    if (rows.length === 0) { board.innerHTML = '<p class="muted">No check-ins yet.</p>'; return; }
+    board.innerHTML = '<table><tr><th>#</th><th>Wallet</th><th style="text-align:right">Best streak</th></tr>' +
+      rows.map(([user, s], i) => '<tr><td>' + (i + 1) + '</td><td><code>' + shortAddr(user) + '</code></td><td class="num">' + s.toString() + '</td></tr>').join("") + '</table>';
+  } catch (e) {
+    // Graceful fallback: user stats keep working, leaderboard just reports the failure.
+    board.innerHTML = '<p class="muted">Leaderboard unavailable right now (could not read on-chain events: ' + (e.shortMessage || e.message) + '). Your stats above are unaffected.</p>';
+  }
+}
+
+$("connectBtn").addEventListener("click", async () => {
+  if (!window.ethereum) { $("status").textContent = "No wallet found in this browser (window.ethereum is missing)."; return; }
+  try {
+    walletProvider = new ethers.BrowserJsonRpcProvider(window.ethereum);
+    const accounts = await walletProvider.send("eth_requestAccounts", []);
+    account = accounts[0];
+    const net = await walletProvider.getNetwork();
+    $("accountLine").textContent = "Connected: " + shortAddr(account) + " · chain " + net.chainId;
+    if (Number(net.chainId) !== CHAIN_ID) {
+      $("status").textContent = "Wrong network — please switch to chain 56.";
+      $("switchBtn").style.display = "";
+    } else {
+      $("status").textContent = "Connected.";
+      $("switchBtn").style.display = "none";
+    }
+    await refreshUser();
+  } catch (e) {
+    $("status").textContent = "Connection failed: " + (e.shortMessage || e.message);
+  }
+});
+
+$("switchBtn").addEventListener("click", async () => {
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+    $("status").textContent = "Connected.";
+    $("switchBtn").style.display = "none";
+    await refreshUser();
+  } catch (e) {
+    $("status").textContent = "Network switch failed: " + (e.shortMessage || e.message);
+  }
+});
+
+$("checkInBtn").addEventListener("click", async () => {
+  if (!signer) signer = await walletProvider.getSigner();
+  $("checkInMsg").textContent = "Waiting for your confirmation in your wallet…";
+  $("checkInBtn").disabled = true;
+  try {
+    const c = new ethers.Contract(CONTRACT_ADDRESS, AGENT_STREAK_ABI, signer);
+    const tx = await c.checkIn();
+    $("checkInMsg").textContent = "Transaction sent: " + tx.hash + " — waiting for confirmation…";
+    await tx.wait();
+    $("checkInMsg").textContent = "Checked in! See you tomorrow (UTC).";
+    await refreshUser();
+    await refreshGlobal();
+    await loadLeaderboard();
+  } catch (e) {
+    $("checkInMsg").textContent = "Check-in failed: " + (e.shortMessage || e.message);
+    await refreshUser();
+  }
+});
+
+refreshGlobal();
+loadLeaderboard();
+</script>
+</body>
+</html>
